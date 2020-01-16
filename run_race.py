@@ -25,6 +25,7 @@ import glob
 import json
 import apex
 
+import pandas as pd
 import numpy as np
 import torch
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
@@ -111,34 +112,23 @@ class InputFeatures(object):
         self.label = label
 
 
-
-## paths is a list containing all paths
-def read_race_examples(paths):
+# paths is a list containing all paths
+def read_race_examples(path):
     examples = []
-    for path in paths:
-        filenames = glob.glob(path+"/*txt")
-        for filename in filenames:
-            with open(filename, 'r', encoding='utf-8') as fpr:
-                data_raw = json.load(fpr)
-                article = data_raw['article']
-                ## for each qn
-                for i in range(len(data_raw['answers'])):
-                    truth = ord(data_raw['answers'][i]) - ord('A')
-                    question = data_raw['questions'][i]
-                    options = data_raw['options'][i]
-                    examples.append(
-                        RaceExample(
-                            race_id = filename+'-'+str(i),
-                            context_sentence = article,
-                            start_ending = question,
+    df = pd.read_csv(path)
+    for row in df.iterrows():
+        buf = RaceExample(
+            race_id = row[1]['id'],  
+            context_sentence = row[1]["article"],
+            start_ending = row[1]["question"],
 
-                            ending_0 = options[0],
-                            ending_1 = options[1],
-                            ending_2 = options[2],
-                            ending_3 = options[3],
-                            label = truth))
-                
-    return examples 
+            ending_0 = str(row[1]["op0"]),
+            ending_1 = str(row[1]["op1"]),
+            ending_2 = str(row[1]["op2"]),
+            ending_3 = str(row[1]["op3"]),
+            label    = int(row[1]["label"]) - 1)
+        examples.append(buf)
+    return examples
 
 
 
@@ -272,7 +262,7 @@ def main():
 
     ## Other parameters
     parser.add_argument("--max_seq_length",
-                        default=128,
+                        default=512,
                         type=int,
                         help="The maximum total input sequence length after WordPiece tokenization. \n"
                              "Sequences longer than this will be truncated, and sequences shorter \n"
@@ -290,7 +280,7 @@ def main():
                         action='store_true',
                         help="Set this flag if you are using an uncased model.")
     parser.add_argument("--train_batch_size",
-                        default=32,
+                        default=4,
                         type=int,
                         help="Total batch size for training.")
     parser.add_argument("--eval_batch_size",
@@ -364,18 +354,19 @@ def main():
 
     if not args.do_train and not args.do_eval:
         raise ValueError("At least one of `do_train` or `do_eval` must be True.")
-
-    if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
-        raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
-    os.makedirs(args.output_dir, exist_ok=True)
+    if os.path.exists(args.output_dir) == False:
+        os.makedirs(args.output_dir, exist_ok=True)
+#     if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
+#         raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
+    
 
     tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
 
     train_examples = None
     num_train_steps = None
     if args.do_train:
-        train_dir = os.path.join(args.data_dir, 'train')
-        train_examples = read_race_examples([train_dir+'/high', train_dir+'/middle'])
+        train_path = os.path.join(args.data_dir, 'train_merge.csv')
+        train_examples = read_race_examples(train_path)
         
         num_train_steps = int(
             len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps * args.num_train_epochs)
@@ -456,7 +447,7 @@ def main():
         for ep in range(int(args.num_train_epochs)):
             tr_loss = 0
             nb_tr_examples, nb_tr_steps = 0, 0
-            logger.info("Trianing Epoch: {}/{}".format(ep+1, int(args.num_train_epochs)))
+            logger.info("Training Epoch: {}/{}".format(ep+1, int(args.num_train_epochs)))
             for step, batch in enumerate(train_dataloader):
                 batch = tuple(t.to(device) for t in batch)
                 input_ids, input_mask, segment_ids, label_ids = batch
@@ -490,69 +481,65 @@ def main():
                     logger.info("Training loss: {}, global step: {}".format(tr_loss/nb_tr_steps, global_step))
 
 
-            ## evaluate on dev set
-            if global_step % 1000 == 0:
-                dev_dir = os.path.join(args.data_dir, 'dev')
-                dev_set = [dev_dir+'/high', dev_dir+'/middle']
+            dev_set = os.path.join(args.data_dir, 'dev_merge.csv')
+            eval_examples = read_race_examples(dev_set)
+            eval_features = convert_examples_to_features(
+                eval_examples, tokenizer, args.max_seq_length, True)
+            logger.info("***** Running evaluation: Dev *****")
+            logger.info("  Num examples = %d", len(eval_examples))
+            logger.info("  Batch size = %d", args.eval_batch_size)
+            all_input_ids = torch.tensor(select_field(eval_features, 'input_ids'), dtype=torch.long)
+            all_input_mask = torch.tensor(select_field(eval_features, 'input_mask'), dtype=torch.long)
+            all_segment_ids = torch.tensor(select_field(eval_features, 'segment_ids'), dtype=torch.long)
+            all_label = torch.tensor([f.label for f in eval_features], dtype=torch.long)
+            eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
+            # Run prediction for full data
+            eval_sampler = SequentialSampler(eval_data)
+            eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
 
-                eval_examples = read_race_examples(dev_set)
-                eval_features = convert_examples_to_features(
-                    eval_examples, tokenizer, args.max_seq_length, True)
-                logger.info("***** Running evaluation: Dev *****")
-                logger.info("  Num examples = %d", len(eval_examples))
-                logger.info("  Batch size = %d", args.eval_batch_size)
-                all_input_ids = torch.tensor(select_field(eval_features, 'input_ids'), dtype=torch.long)
-                all_input_mask = torch.tensor(select_field(eval_features, 'input_mask'), dtype=torch.long)
-                all_segment_ids = torch.tensor(select_field(eval_features, 'segment_ids'), dtype=torch.long)
-                all_label = torch.tensor([f.label for f in eval_features], dtype=torch.long)
-                eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
-                # Run prediction for full data
-                eval_sampler = SequentialSampler(eval_data)
-                eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
+            model.eval()
+            eval_loss, eval_accuracy = 0, 0
+            nb_eval_steps, nb_eval_examples = 0, 0
+            for step, batch in enumerate(eval_dataloader):
+                batch = tuple(t.to(device) for t in batch)
+                input_ids, input_mask, segment_ids, label_ids = batch
 
-                model.eval()
-                eval_loss, eval_accuracy = 0, 0
-                nb_eval_steps, nb_eval_examples = 0, 0
-                for step, batch in enumerate(eval_dataloader):
-                    batch = tuple(t.to(device) for t in batch)
-                    input_ids, input_mask, segment_ids, label_ids = batch
+                with torch.no_grad():
+                    tmp_eval_loss = model(input_ids, segment_ids, input_mask, label_ids)
+                    logits = model(input_ids, segment_ids, input_mask)
 
-                    with torch.no_grad():
-                        tmp_eval_loss = model(input_ids, segment_ids, input_mask, label_ids)
-                        logits = model(input_ids, segment_ids, input_mask)
+                logits = logits.detach().cpu().numpy()
+                label_ids = label_ids.to('cpu').numpy()
+                tmp_eval_accuracy = accuracy(logits, label_ids)
 
-                    logits = logits.detach().cpu().numpy()
-                    label_ids = label_ids.to('cpu').numpy()
-                    tmp_eval_accuracy = accuracy(logits, label_ids)
+                eval_loss += tmp_eval_loss.mean().item()
+                eval_accuracy += tmp_eval_accuracy
 
-                    eval_loss += tmp_eval_loss.mean().item()
-                    eval_accuracy += tmp_eval_accuracy
+                nb_eval_examples += input_ids.size(0)
+                nb_eval_steps += 1
 
-                    nb_eval_examples += input_ids.size(0)
-                    nb_eval_steps += 1
+            eval_loss = eval_loss / nb_eval_steps
+            eval_accuracy = eval_accuracy / nb_eval_examples
 
-                eval_loss = eval_loss / nb_eval_steps
-                eval_accuracy = eval_accuracy / nb_eval_examples
+            result = {'dev_eval_loss': eval_loss,
+                      'dev_eval_accuracy': eval_accuracy,
+                      'global_step': global_step,
+                      'loss': tr_loss/nb_tr_steps}
 
-                result = {'dev_eval_loss': eval_loss,
-                          'dev_eval_accuracy': eval_accuracy,
-                          'global_step': global_step,
-                          'loss': tr_loss/nb_tr_steps}
-
-                output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
-                with open(output_eval_file, "a+") as writer:
-                    logger.info("***** Dev results *****")
-                    for key in sorted(result.keys()):
-                        logger.info("  %s = %s", key, str(result[key]))
-                        writer.write("%s = %s\n" % (key, str(result[key])))
+            output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
+            with open(output_eval_file, "a+") as writer:
+                logger.info("***** Dev results *****")
+                for key in sorted(result.keys()):
+                    logger.info("  %s = %s", key, str(result[key]))
+                    writer.write("%s = %s\n" % (key, str(result[key])))
 
 
 
 
-    # Save a trained model
-    model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
-    output_model_file = os.path.join(args.output_dir, "pytorch_model.bin")
-    torch.save(model_to_save.state_dict(), output_model_file)
+            # Save a trained model
+            model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
+            output_model_file = os.path.join(args.output_dir, "merge_pytorch_model_" + str(ep) + ".bin")
+            torch.save(model_to_save.state_dict(), output_model_file)
 
 
     ## Load a trained model that you have fine-tuned
