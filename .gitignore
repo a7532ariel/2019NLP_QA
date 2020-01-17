@@ -2,3 +2,4 @@ apex
 base_models/
 output/
 TrainingData
+*long_article.csv
