@@ -3,7 +3,7 @@ import json
 import pandas as pd
 
 test = False
-data_dir = '../data/TrainingData/clean_squad/'
+data_dir = '../../data/TrainingData/clean_squad/'
 csv_name = 'full_train.csv'
 columns = ['id', '文章', '問題', '選項1', '選項2', '選項3', '選項4', '答案']
 
