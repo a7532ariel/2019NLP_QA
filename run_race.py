@@ -267,6 +267,11 @@ def main():
                         help="The maximum total input sequence length after WordPiece tokenization. \n"
                              "Sequences longer than this will be truncated, and sequences shorter \n"
                              "than this will be padded.")
+                            
+    parser.add_argument("--load_model",
+                        type=str,
+                        help="load model path.")
+                            
     parser.add_argument("--do_train",
                         default=False,
                         action='store_true',
@@ -365,14 +370,21 @@ def main():
     train_examples = None
     num_train_steps = None
     if args.do_train:
-        train_path = os.path.join(args.data_dir, 'train_merge.csv')
+        train_path = os.path.join(args.data_dir, 'train_all.csv')
         train_examples = read_race_examples(train_path)
         
         num_train_steps = int(
             len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps * args.num_train_epochs)
 
     # Prepare model
-    model = BertForMultipleChoice.from_pretrained(args.bert_model,
+    if args.load_model:
+        logger.info("***** Loading Model *****")
+        model_state_dict = torch.load(args.load_model)
+        model = BertForMultipleChoice.from_pretrained(args.bert_model,
+        state_dict=model_state_dict, num_choices=4)
+        logger.info("loaded model %s", args.load_model)
+    else:
+        model = BertForMultipleChoice.from_pretrained(args.bert_model,
         cache_dir=PYTORCH_PRETRAINED_BERT_CACHE / 'distributed_{}'.format(args.local_rank),
         num_choices=4)
     if args.fp16:
@@ -481,7 +493,7 @@ def main():
                     logger.info("Training loss: {}, global step: {}".format(tr_loss/nb_tr_steps, global_step))
 
 
-            dev_set = os.path.join(args.data_dir, 'dev_merge.csv')
+            dev_set = os.path.join(args.data_dir, 'dev_all.csv')
             eval_examples = read_race_examples(dev_set)
             eval_features = convert_examples_to_features(
                 eval_examples, tokenizer, args.max_seq_length, True)
