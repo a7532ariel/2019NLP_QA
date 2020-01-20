@@ -2,19 +2,19 @@ import os
 import tqdm
 import pandas as pd
 
-test = False
-squad = True
-dir_path = '../data/TrainingData'
-# dir_path = '../data/TestingData'
+test = True
+squad = False
+# dir_path = '../../data/TrainingData'
+dir_path = '../../data/TestingData'
 columns = ['id', '文章', '問題', '選項1', '選項2', '選項3', '選項4', '答案']
 dirty = ['\n', '\r', ' ']
 
-if squad:
-    save_dir = '../data/TrainingData/clean_squad'
-else:
-    save_dir = '../data/TrainingData/clean'
+# if squad:
+#     save_dir = '../../data/TrainingData/clean_squad'
+# else:
+#     save_dir = '../../data/TrainingData/clean'
 
-# save_dir = '../data/TestingData'
+save_dir = '../../data/TestingData'
 
 
 def clean_str(x):
@@ -24,17 +24,27 @@ def clean_str(x):
 
 
 def create_new_row(old_row, idx, context, ans_idx=0, test=False):
-    dictionary = {
-        'id': idx,
-        '文章': clean_str(context),
-        '問題': clean_str(old_row[columns.index('問題')]),
-        '選項1': clean_str(str(old_row[columns.index('選項1')])),
-        '選項2': clean_str(str(old_row[columns.index('選項2')])),
-        '選項3': clean_str(str(old_row[columns.index('選項3')])),
-        '選項4': clean_str(str(old_row[columns.index('選項4')])),
-    }
     if not test:
-        dictionary['答案'] = ans_idx
+        dictionary = {
+            'id': idx,
+            '文章': clean_str(context),
+            '問題': clean_str(old_row[columns.index('問題')]),
+            '選項1': clean_str(str(old_row[columns.index('選項1')])),
+            '選項2': clean_str(str(old_row[columns.index('選項2')])),
+            '選項3': clean_str(str(old_row[columns.index('選項3')])),
+            '選項4': clean_str(str(old_row[columns.index('選項4')])),
+            '答案': ans_idx,
+        }
+    else:
+        dictionary = {
+            'id': idx,
+            '文章': clean_str(context),
+            '問題': clean_str(old_row[columns.index('問題')]),
+            '選項1': clean_str(str(old_row[columns.index('選項1')])),
+            '選項2': clean_str(str(old_row[columns.index('選項2')])),
+            '選項3': clean_str(str(old_row[columns.index('選項3')])),
+            '選項4': clean_str(str(old_row[columns.index('選項4')])),
+        }
     return pd.Series(dictionary)
 
 
@@ -51,19 +61,22 @@ def clean_df(df, real_idx=0):
         else:
             last_context = context
 
-        if not test and squad:
+        if not test:
             ''' for squad, use data only if answer can be found in context'''
             ans_idx = row[columns.index('答案')]
             if type(ans_idx) == str:  # fix the answer idx
                 ans_idx = int(ans_idx[-1])
             ans = str(row[columns.index('選項{}'.format(ans_idx))])
-            if ans not in context:
+            if squad and (ans not in context):
                 continue
 
-        r = create_new_row(row, real_idx, context, ans_idx, test)
+        if test:
+            r = create_new_row(row, row[columns.index('id')], context, ans_idx, test)
+        else:
+            r = create_new_row(row, real_idx, context, ans_idx, test)
         out_df = out_df.append(r, ignore_index=True)
         real_idx += 1
-    return out_df
+    return out_df, real_idx
 
 
 if __name__ == "__main__":
